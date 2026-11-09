@@ -116,6 +116,7 @@ final class NotchController: NSObject {
         hotView.autoresizingMask = [.width, .height]
         let pill = PassthroughHostingView(rootView: CollapsedPillView(state: state))
         pill.sizingOptions = []
+        pill.safeAreaRegions = []   // Xcode 26 SDK: don't add the notch as extra top inset
         pill.frame = hotView.bounds
         pill.autoresizingMask = [.width, .height]
         hotView.addSubview(pill)
@@ -132,6 +133,7 @@ final class NotchController: NSObject {
         container.autoresizingMask = [.width, .height]
         let host = NSHostingView(rootView: NotchPanelView(state: state))
         host.sizingOptions = []
+        host.safeAreaRegions = []   // Xcode 26 SDK: don't add the notch as extra top inset
         host.frame = container.bounds
         host.autoresizingMask = [.width, .height]
         container.addSubview(host)

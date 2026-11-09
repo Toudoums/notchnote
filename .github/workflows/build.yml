@@ -10,12 +10,6 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Use Xcode 16 (same toolchain as build-14)
-        run: |
-          ls -d /Applications/Xcode*.app
-          X=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -1)
-          if [ -z "$X" ]; then echo "::error::No Xcode 16 on this runner"; exit 1; fi
-          sudo xcode-select -s "$X"
       - name: Show toolchain
         run: |
           xcodebuild -version

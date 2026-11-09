@@ -28,6 +28,8 @@
 	<true/>
 	<key>LSUIElement</key>
 	<true/>
+	<key>UIDesignRequiresCompatibility</key>
+	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>Personal build. Not affiliated with GlideNote.</string>
 	<key>NSPrincipalClass</key>
