@@ -44,6 +44,10 @@ final class NotchController: NSObject {
         NotificationCenter.default.addObserver(self, selector: #selector(screensChanged),
                                                name: NSApplication.didChangeScreenParametersNotification, object: nil)
 
+        // Mission Control desktops: keep the notch on every Space and re-assert it after each switch.
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(spaceChanged),
+                                                          name: NSWorkspace.activeSpaceDidChangeNotification, object: nil)
+
         // Click anywhere outside the expanded panel collapses it (unless pinned).
         clickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
             MainActor.assumeIsolated { self?.handleOutsideClick() }
@@ -58,6 +62,16 @@ final class NotchController: NSObject {
         settings.objectWillChange.sink { [weak self] _ in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.relayoutSoon() } }
         }.store(in: &cancellables)
+    }
+
+    @objc private func spaceChanged() {
+        let behavior: NSWindow.CollectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+        for slot in slots.values {
+            slot.hot.collectionBehavior = behavior
+            slot.main.collectionBehavior = behavior
+            slot.hot.orderFrontRegardless()
+            if slot.state.isOpen { slot.main.orderFrontRegardless() }
+        }
     }
 
     @objc private func screensChanged() {
@@ -171,8 +185,10 @@ final class NotchController: NSObject {
     /// Make the panel on this display key and put the caret in the editor. Esc / typing then go to this display only.
     func activate(_ id: CGDirectDisplayID) {
         guard let slot = slots[id] else { return }
-        NSApp.activate()
+        // The panel is non-activating and lives on every Space, so make it key *without* activating the app:
+        // activating an accessory app can make macOS jump back to the desktop that holds its other windows.
         slot.main.makeKeyAndOrderFront(nil)
+        if !slot.main.isKeyWindow { NSApp.activate() }
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
                 if let editor = slot.main.contentView?.findEditor() { slot.main.makeFirstResponder(editor) }
