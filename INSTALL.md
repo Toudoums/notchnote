@@ -1,7 +1,5 @@
 # NotchNote: install, pause, restart, remove
 
-**To update:** double-click `Update NotchNote.command` (download it from the newest release at https://github.com/Toudoums/notchnote/releases). It replaces the app with the newest version and keeps your notes.
-
 **Quickest way: go to "Option A" at the bottom. No Xcode, no Terminal.**
 
 Everything below is done on your Mac. You do not need a paid Apple account. Allow about 20 minutes the first time, mostly waiting for Xcode to download.

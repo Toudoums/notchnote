@@ -39,20 +39,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          cp "Update NotchNote.command" Update-NotchNote.command
-          cat > notes.md <<'NOTES'
-          ## Install (first time)
-          1. Download **NotchNote-app.zip** below and double-click it to unzip.
-          2. Drag **NotchNote.app** into your **Applications** folder.
-          3. Right-click NotchNote in Applications, choose **Open**, then **Open** again (only the first time).
-
-          ## Update (later)
-          Download **Update-NotchNote.command** below and double-click it (first time: right-click, Open).
-          It closes NotchNote, installs the newest version and reopens it. Your notes are kept.
-
-          Or do it by hand: quit NotchNote from its menu-bar icon, download the new zip, and drag the new app into Applications, replacing the old one.
-          NOTES
-          gh release create "build-${{ github.run_number }}" NotchNote-app.zip Update-NotchNote.command \
-            --latest \
-            --title "NotchNote 1.0 (build ${{ github.run_number }})" \
-            --notes-file notes.md
+          gh release create "build-${{ github.run_number }}" NotchNote-app.zip \
+            --title "NotchNote build ${{ github.run_number }}" \
+            --notes "Unzip, drag NotchNote.app into Applications, then right-click it and choose Open the first time."
