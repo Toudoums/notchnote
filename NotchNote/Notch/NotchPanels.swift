@@ -118,3 +118,49 @@ final class PanelContainerView: NSView {
     override func mouseEntered(with event: NSEvent) { onEnter?() }
     override func mouseExited(with event: NSEvent) { onExit?() }
 }
+
+// MARK: Every desktop
+
+/// "All Spaces" windows alone are not reliable for an accessory app: macOS can leave them behind on the
+/// desktop where they were created. Like other notch apps, we also put the notch windows in a window-server
+/// space that is shown on top of every desktop and full-screen app. Private API (SkyLight), loaded at
+/// runtime; if it is missing the app keeps working with the normal behaviour.
+@MainActor
+final class NotchSpace {
+    static let shared = NotchSpace()
+
+    private typealias MainConnection = @convention(c) () -> Int32
+    private typealias SpaceCreate = @convention(c) (Int32, Int32, CFDictionary?) -> UInt64
+    private typealias SpaceSetLevel = @convention(c) (Int32, UInt64, Int32) -> Void
+    private typealias ShowSpaces = @convention(c) (Int32, CFArray) -> Void
+    private typealias AddWindows = @convention(c) (Int32, CFArray, CFArray) -> Void
+
+    private var connection: Int32 = 0
+    private var space: UInt64 = 0
+    private var addWindows: AddWindows?
+
+    private init() {
+        guard let lib = dlopen("/System/Library/PrivateFrameworks/SkyLight.framework/SkyLight", RTLD_LAZY) else { return }
+        func load<T>(_ name: String, _: T.Type) -> T? {
+            guard let p = dlsym(lib, name) else { return nil }
+            return unsafeBitCast(p, to: T.self)
+        }
+        guard let main = load("CGSMainConnectionID", MainConnection.self),
+              let create = load("CGSSpaceCreate", SpaceCreate.self),
+              let setLevel = load("CGSSpaceSetAbsoluteLevel", SpaceSetLevel.self),
+              let show = load("CGSShowSpaces", ShowSpaces.self),
+              let add = load("CGSAddWindowsToSpaces", AddWindows.self) else { return }
+        connection = main()
+        space = create(connection, 1, nil)
+        guard space != 0 else { return }
+        setLevel(connection, space, Int32.max)
+        show(connection, [NSNumber(value: space)] as CFArray)
+        addWindows = add
+    }
+
+    /// Safe to call repeatedly (after every order-front).
+    func adopt(_ window: NSWindow) {
+        guard let addWindows, window.windowNumber > 0 else { return }
+        addWindows(connection, [NSNumber(value: window.windowNumber)] as CFArray, [NSNumber(value: space)] as CFArray)
+    }
+}

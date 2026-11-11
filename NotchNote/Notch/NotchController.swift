@@ -70,7 +70,8 @@ final class NotchController: NSObject {
             slot.hot.collectionBehavior = behavior
             slot.main.collectionBehavior = behavior
             slot.hot.orderFrontRegardless()
-            if slot.state.isOpen { slot.main.orderFrontRegardless() }
+            NotchSpace.shared.adopt(slot.hot)
+            if slot.state.isOpen { slot.main.orderFrontRegardless(); NotchSpace.shared.adopt(slot.main) }
         }
     }
 
@@ -126,6 +127,7 @@ final class NotchController: NSObject {
         hotView.onDropText = { text in TaskStore.shared.addCard(text) }
         hot.contentView = hotView
         hot.orderFrontRegardless()
+        NotchSpace.shared.adopt(hot)
 
         // Expanded panel (shown on demand)
         let main = NotchPanel(frame: geo.expandedFrame(settings))
@@ -176,6 +178,7 @@ final class NotchController: NSObject {
             slot.main.setFrame(slot.geometry.expandedFrame(settings), display: false)
             slot.main.orderFrontRegardless()
         }
+        NotchSpace.shared.adopt(slot.main)
         if !wasOpen {
             if haptic { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now) }
             // One run-loop turn later so SwiftUI has rendered the closed state to animate from.
@@ -189,8 +192,9 @@ final class NotchController: NSObject {
         guard let slot = slots[id] else { return }
         // The panel is non-activating and lives on every Space, so make it key *without* activating the app:
         // activating an accessory app can make macOS jump back to the desktop that holds its other windows.
+        // Never activate the app here: that is what makes macOS jump to another desktop.
         slot.main.makeKeyAndOrderFront(nil)
-        if !slot.main.isKeyWindow { NSApp.activate() }
+        NotchSpace.shared.adopt(slot.main)
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
                 if let editor = slot.main.contentView?.findEditor() { slot.main.makeFirstResponder(editor) }
