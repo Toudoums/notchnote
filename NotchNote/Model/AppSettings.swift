@@ -47,6 +47,15 @@ final class AppSettings: ObservableObject {
     @Published var lastSelectedTaskID: String? { didSet { d.set(lastSelectedTaskID, forKey: "lastSelectedTaskID") } }
     /// Tags added in Settings that are not in a group (tags used in notes are found automatically).
     @Published var savedTags: [String] { didSet { d.set(savedTags, forKey: "savedTags") } }
+    /// Tag -> color hex ("#RRGGBB"). Tags without an entry use the default green.
+    @Published var tagColors: [String: String] {
+        didSet {
+            d.set(tagColors, forKey: "tagColors")
+            NotificationCenter.default.post(name: .chipStyleChanged, object: nil)
+        }
+    }
+    /// Hide the notch on a display while an app or a web page is full screen there.
+    @Published var hideInFullScreen: Bool { didSet { d.set(hideInFullScreen, forKey: "hideInFullScreen") } }
     @Published var tagGroups: [TagGroup] {
         didSet { d.set(try? JSONEncoder().encode(tagGroups), forKey: "tagGroups") }
     }
@@ -72,6 +81,8 @@ final class AppSettings: ObservableObject {
         hasOnboarded = d.object(forKey: "hasOnboarded") as? Bool ?? false
         lastSelectedTaskID = d.string(forKey: "lastSelectedTaskID")
         savedTags = d.stringArray(forKey: "savedTags") ?? []
+        tagColors = d.dictionary(forKey: "tagColors") as? [String: String] ?? [:]
+        hideInFullScreen = d.object(forKey: "hideInFullScreen") as? Bool ?? false
         tagGroups = (d.data(forKey: "tagGroups")).flatMap { try? JSONDecoder().decode([TagGroup].self, from: $0) } ?? []
     }
 
@@ -119,6 +130,7 @@ final class AppSettings: ObservableObject {
 
     func forgetTag(_ tag: String) {
         savedTags.removeAll { $0 == tag }
+        tagColors[tag] = nil
         var groups = tagGroups
         for i in groups.indices { groups[i].tags.removeAll { $0 == tag } }
         tagGroups = groups
@@ -140,6 +152,12 @@ final class AppSettings: ObservableObject {
         guard let g = tagGroups.first(where: { $0.id == id }) else { return }
         tagGroups.removeAll { $0.id == id }
         savedTags = Array(Set(savedTags + g.tags)).sorted()
+    }
+
+    /// Read straight from UserDefaults so chip drawing (not tied to the main actor) can use it.
+    nonisolated static func storedTagColor(_ tag: String) -> NSColor? {
+        guard let hex = (UserDefaults.standard.dictionary(forKey: "tagColors") as? [String: String])?[tag] else { return nil }
+        return NSColor(hex: hex)
     }
 
     var textColor: Color { Color(nsColor: NSColor(hex: textColorHex)) }
@@ -180,4 +198,9 @@ extension NSColor {
                       Int((c.greenComponent * 255).rounded()),
                       Int((c.blueComponent * 255).rounded()))
     }
+}
+
+extension Notification.Name {
+    /// Chip colors or labels changed: editors redraw their chips.
+    static let chipStyleChanged = Notification.Name("NotchNoteChipStyleChanged")
 }

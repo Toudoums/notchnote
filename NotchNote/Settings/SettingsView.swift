@@ -7,6 +7,7 @@ struct SettingsView: View {
     @State private var loginError: String?
     @State private var newTag = ""
     @State private var newTagGroup: UUID?
+    @State private var newTagColor = Color(nsColor: ChipKind.tag.fill.withAlphaComponent(1))
     @State private var newGroup = ""
     @State private var tagToDelete: String?
 
@@ -68,6 +69,7 @@ struct SettingsView: View {
             }
 
             Section("Appearance") {
+                Toggle("Hide the notch when an app or a web page is full screen", isOn: $settings.hideInFullScreen)
                 Picker("Display without a notch", selection: $settings.externalStyleRaw) {
                     ForEach(ExternalStyle.allCases) { Text($0.title).tag($0.rawValue) }
                 }
@@ -140,17 +142,24 @@ struct SettingsView: View {
 
     private var tagsSection: some View {
         Section("Tags") {
-            HStack {
-                TextField("New tag", text: $newTag).onSubmit(addTag)
+            HStack(spacing: 8) {
+                TextField("", text: $newTag, prompt: Text("New tag name"))
+                    .labelsHidden()
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(addTag)
+                ColorPicker("", selection: $newTagColor, supportsOpacity: false).labelsHidden()
                 Picker("", selection: $newTagGroup) {
                     Text("No group").tag(UUID?.none)
                     ForEach(settings.tagGroups) { Text($0.name).tag(UUID?.some($0.id)) }
                 }
-                .labelsHidden().frame(width: 130)
-                Button("Add", action: addTag).disabled(AppSettings.normalizeTag(newTag) == nil)
+                .labelsHidden().frame(width: 120)
+                Button("Add tag", action: addTag).disabled(AppSettings.normalizeTag(newTag) == nil)
             }
-            HStack {
-                TextField("New group", text: $newGroup).onSubmit(addGroup)
+            HStack(spacing: 8) {
+                TextField("", text: $newGroup, prompt: Text("New group name"))
+                    .labelsHidden()
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(addGroup)
                 Button("Add group", action: addGroup)
                     .disabled(newGroup.trimmingCharacters(in: .whitespaces).isEmpty)
             }
@@ -158,8 +167,10 @@ struct SettingsView: View {
             ForEach(settings.tagGroups) { g in
                 HStack {
                     Image(systemName: "folder").foregroundStyle(.secondary)
-                    TextField("Group name", text: Binding(get: { g.name }, set: { settings.renameGroup(g.id, $0) }))
+                    TextField("", text: Binding(get: { g.name }, set: { settings.renameGroup(g.id, $0) }), prompt: Text("Group name"))
+                        .labelsHidden()
                         .textFieldStyle(.plain).fontWeight(.semibold)
+                        .help("Click to rename the group")
                     Spacer()
                     Button { settings.deleteGroup(g.id) } label: { Image(systemName: "trash") }
                         .buttonStyle(.borderless)
@@ -183,7 +194,13 @@ struct SettingsView: View {
 
     private func tagRow(_ t: String) -> some View {
         HStack {
-            Text("#" + t).padding(.leading, 24)
+            ColorPicker("", selection: Binding(
+                get: { Color(nsColor: AppSettings.storedTagColor(t) ?? ChipKind.tag.fill.withAlphaComponent(1)) },
+                set: { settings.tagColors[t] = NSColor($0).hexString }), supportsOpacity: false)
+                .labelsHidden()
+                .padding(.leading, 16)
+                .help("Tag color")
+            Text("#" + t)
             let n = store.notesUsing(tag: t)
             if n > 0 { Text("\(n) note\(n == 1 ? "" : "s")").font(.caption).foregroundStyle(.secondary) }
             Spacer()
@@ -199,8 +216,9 @@ struct SettingsView: View {
     }
 
     private func addTag() {
-        guard AppSettings.normalizeTag(newTag) != nil else { return }
-        settings.addTag(newTag, group: newTagGroup)
+        guard let t = AppSettings.normalizeTag(newTag) else { return }
+        settings.addTag(t, group: newTagGroup)
+        settings.tagColors[t] = NSColor(newTagColor).hexString
         newTag = ""
     }
 

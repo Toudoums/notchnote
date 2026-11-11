@@ -33,6 +33,8 @@ final class EditorTextView: NSTextView {
         insertionPointColor = baseColor
         NotificationCenter.default.addObserver(self, selector: #selector(dayChanged),
                                                name: .NSCalendarDayChanged, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(dayChanged),
+                                               name: .chipStyleChanged, object: nil)
     }
 
     /// Date chips say Today / Tomorrow / "2 days late": redraw them when the day changes.
@@ -111,7 +113,8 @@ final class EditorTextView: NSTextView {
         }
         guard caret - 1 > start else { return }
         let word = ns.substring(with: NSRange(location: start, length: caret - 1 - start))
-        guard let chip = ChipToken.parseQuick(word) else { return }
+        // "#tag" is confirmed with Return from the suggestion list, never by a space.
+        guard !word.hasPrefix("#"), let chip = ChipToken.parseQuick(word) else { return }
         let att = NSMutableAttributedString(attributedString: NSAttributedString(attachment: ChipAttachment(chip, fontSize: baseFontSize)))
         att.append(NSAttributedString(string: " "))
         replaceAttributed(NSRange(location: start, length: caret - start), with: att)
@@ -258,7 +261,10 @@ final class EditorTextView: NSTextView {
     override func insertNewline(_ sender: Any?) {
         // While an IME is composing, Return belongs to the IME (commit). Never touch it.
         if hasMarkedText() { super.insertNewline(sender); return }
-        if suggestions.isShown { acceptSuggestion(); return }
+        if suggestions.isShown {
+            if let q = tagQuery(), !q.text.isEmpty { acceptSuggestion(); return }
+            suggestions.hide()
+        }
         let ns = string as NSString
         let sel = selectedRange()
         let lineRange = ns.lineRange(for: NSRange(location: sel.location, length: 0))
@@ -608,13 +614,20 @@ extension EditorTextView {
         for (word, offset) in [("today", 0), ("tomorrow", 1)] where q.text.isEmpty || word.hasPrefix(q.text) {
             items.append(TagSuggestion(title: "#" + word, detail: "date", chip: .day(offset)))
         }
-        let starts = tags.filter { $0.hasPrefix(q.text) }
+        let exact = tags.filter { $0 == q.text }
+        let starts = tags.filter { $0.hasPrefix(q.text) && $0 != q.text }
         let contains = q.text.isEmpty ? [] : tags.filter { !$0.hasPrefix(q.text) && $0.contains(q.text) }
-        for t in starts + contains {
+        if let new = AppSettings.normalizeTag(q.text), new == q.text, !tags.contains(new), new != "today", new != "tomorrow",
+           starts.isEmpty {
+            // Nothing else starts like this: Return creates the new tag.
+            items.insert(TagSuggestion(title: "#" + new, detail: "new tag", chip: ChipToken(kind: .tag, value: new)), at: 0)
+        }
+        for t in exact + starts + contains {
             items.append(TagSuggestion(title: "#" + t, detail: AppSettings.shared.group(of: t)?.name ?? "",
                                        chip: ChipToken(kind: .tag, value: t)))
         }
-        if let new = AppSettings.normalizeTag(q.text), !tags.contains(new), new != "today", new != "tomorrow" {
+        if let new = AppSettings.normalizeTag(q.text), !tags.contains(new), new != "today", new != "tomorrow",
+           !items.contains(where: { $0.title == "#" + new }) {
             items.append(TagSuggestion(title: "#" + new, detail: "new tag", chip: ChipToken(kind: .tag, value: new)))
         }
         guard !items.isEmpty else { suggestions.hide(); return }

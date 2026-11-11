@@ -33,6 +33,9 @@ final class NotchController: NSObject {
     private var rebuildWork: DispatchWorkItem?
     private var relayoutPending = false
     private var clickMonitor: Any?
+    private var fullScreenTimer: Timer?
+    /// Displays where the notch is hidden because an app is full screen there.
+    private var hiddenForFullScreen = Set<CGDirectDisplayID>()
     private var cancellables = Set<AnyCancellable>()
     private let settings = AppSettings.shared
 
@@ -53,6 +56,16 @@ final class NotchController: NSObject {
             MainActor.assumeIsolated { self?.handleOutsideClick() }
         }
 
+        // Optional: hide the notch while an app or a web page is full screen on that display.
+        NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(fullScreenMaybeChanged),
+                                                          name: NSWorkspace.didActivateApplicationNotification, object: nil)
+        fullScreenTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateFullScreenHiding() }
+        }
+        settings.$hideInFullScreen.dropFirst().removeDuplicates().sink { [weak self] _ in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.updateFullScreenHiding() } }
+        }.store(in: &cancellables)
+
         // A different style for displays without a notch needs the panels rebuilt.
         settings.$externalStyleRaw.dropFirst().removeDuplicates().sink { [weak self] _ in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.rebuild() } }
@@ -64,9 +77,55 @@ final class NotchController: NSObject {
         }.store(in: &cancellables)
     }
 
+    @objc private func fullScreenMaybeChanged() {
+        // Let the full-screen animation finish before looking.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+            MainActor.assumeIsolated { self?.updateFullScreenHiding() }
+        }
+    }
+
+    private func updateFullScreenHiding() {
+        let covered = settings.hideInFullScreen ? Self.fullScreenDisplays() : []
+        for (id, slot) in slots {
+            if covered.contains(id) {
+                guard !hiddenForFullScreen.contains(id) else { continue }
+                hiddenForFullScreen.insert(id)
+                collapse(id, force: true, animated: false)
+                slot.hot.orderOut(nil)
+            } else if hiddenForFullScreen.remove(id) != nil {
+                slot.hot.orderFrontRegardless()
+                NotchSpace.shared.adopt(slot.hot)
+            }
+        }
+    }
+
+    /// Displays covered by another app's full-screen window (a window exactly the size of the display).
+    private static func fullScreenDisplays() -> Set<CGDirectDisplayID> {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+                as? [[String: Any]] else { return [] }
+        let me = ProcessInfo.processInfo.processIdentifier
+        var out = Set<CGDirectDisplayID>()
+        for screen in NSScreen.screens {
+            let id = screen.displayID
+            let b = CGDisplayBounds(id)
+            for w in list {
+                guard (w[kCGWindowLayer as String] as? Int) == 0,
+                      (w[kCGWindowOwnerPID as String] as? Int32) != me,
+                      let dict = w[kCGWindowBounds as String] as? NSDictionary,
+                      let r = CGRect(dictionaryRepresentation: dict as CFDictionary) else { continue }
+                if abs(r.minX - b.minX) < 1, abs(r.minY - b.minY) < 1, r.width >= b.width - 1, r.height >= b.height - 1 {
+                    out.insert(id)
+                    break
+                }
+            }
+        }
+        return out
+    }
+
     @objc private func spaceChanged() {
+        updateFullScreenHiding()
         let behavior: NSWindow.CollectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
-        for slot in slots.values {
+        for slot in slots.values where !hiddenForFullScreen.contains(slot.geometry.displayID) {
             slot.hot.collectionBehavior = behavior
             slot.main.collectionBehavior = behavior
             slot.hot.orderFrontRegardless()
@@ -100,6 +159,7 @@ final class NotchController: NSObject {
         }
         slots.removeAll()
         expandedID = nil
+        hiddenForFullScreen.removeAll()
 
         for screen in NSScreen.screens {
             let geo = NotchGeometry(screen: screen)
@@ -166,7 +226,7 @@ final class NotchController: NSObject {
     // MARK: Expand / collapse
 
     func expand(_ id: CGDirectDisplayID, focus: Bool, haptic: Bool) {
-        guard let slot = slots[id] else { return }
+        guard let slot = slots[id], !hiddenForFullScreen.contains(id) else { return }
         collapseWork?.cancel()
         hideWork?.cancel()
 

@@ -56,6 +56,7 @@ struct ChipToken: Equatable {
 
     var fill: NSColor {
         if let o = dayOffset, o < 0 { return NSColor(srgbRed: 1.0, green: 0.27, blue: 0.23, alpha: 0.45) }
+        if kind == .tag, let c = AppSettings.storedTagColor(value) { return c.withAlphaComponent(0.45) }
         return kind.fill
     }
 
