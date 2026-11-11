@@ -78,9 +78,9 @@ struct EditorToolbar: View {
     private var chipMenu: some View {
         Menu {
             Menu("Date") {
-                Button("Today") { put(.date, "today") }
-                Button("Tomorrow") { put(.date, "tomorrow") }
-                Button("Next week") { put(.date, "nextweek") }
+                Button("Today") { editor?.insertChip(.day(0)) }
+                Button("Tomorrow") { editor?.insertChip(.day(1)) }
+                Button("Next week") { editor?.insertChip(.day(7)) }
             }
             Menu("Reminder") {
                 Button("In 15 minutes") { put(.rem, reminder(inMinutes: 15)) }
@@ -94,7 +94,7 @@ struct EditorToolbar: View {
                 Button("Low (p3)") { put(.prio, "l") }
             }
             Menu("Tag") {
-                ForEach(Array(Set(["work", "home", "errand"] + ChipToken.values(of: .tag, in: allBodies))).sorted(), id: \.self) { t in
+                ForEach(AppSettings.shared.allTags(in: store.tasks), id: \.self) { t in
                     Button("#" + t) { put(.tag, t) }
                 }
             }

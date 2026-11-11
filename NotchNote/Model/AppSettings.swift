@@ -15,6 +15,13 @@ enum ExternalStyle: String, CaseIterable, Identifiable {
     }
 }
 
+/// A named group of tags, managed in Settings.
+struct TagGroup: Codable, Identifiable, Equatable {
+    var id = UUID()
+    var name: String
+    var tags: [String]
+}
+
 @MainActor
 final class AppSettings: ObservableObject {
     static let shared = AppSettings()
@@ -38,6 +45,11 @@ final class AppSettings: ObservableObject {
     @Published var sortCheckedToBottom: Bool { didSet { d.set(sortCheckedToBottom, forKey: "sortCheckedToBottom") } }
     @Published var hasOnboarded: Bool { didSet { d.set(hasOnboarded, forKey: "hasOnboarded") } }
     @Published var lastSelectedTaskID: String? { didSet { d.set(lastSelectedTaskID, forKey: "lastSelectedTaskID") } }
+    /// Tags added in Settings that are not in a group (tags used in notes are found automatically).
+    @Published var savedTags: [String] { didSet { d.set(savedTags, forKey: "savedTags") } }
+    @Published var tagGroups: [TagGroup] {
+        didSet { d.set(try? JSONEncoder().encode(tagGroups), forKey: "tagGroups") }
+    }
 
     nonisolated static let panelWidthRange: ClosedRange<Double> = 320...900
     nonisolated static let panelHeightRange: ClosedRange<Double> = 200...800
@@ -59,6 +71,75 @@ final class AppSettings: ObservableObject {
         sortCheckedToBottom = d.object(forKey: "sortCheckedToBottom") as? Bool ?? true
         hasOnboarded = d.object(forKey: "hasOnboarded") as? Bool ?? false
         lastSelectedTaskID = d.string(forKey: "lastSelectedTaskID")
+        savedTags = d.stringArray(forKey: "savedTags") ?? []
+        tagGroups = (d.data(forKey: "tagGroups")).flatMap { try? JSONDecoder().decode([TagGroup].self, from: $0) } ?? []
+    }
+
+    // MARK: Tags
+
+    /// "#Work Stuff" -> "work-stuff". Nil if nothing usable is left.
+    nonisolated static func normalizeTag(_ raw: String) -> String? {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        while s.hasPrefix("#") { s.removeFirst() }
+        s = s.replacingOccurrences(of: " ", with: "-")
+        s = String(s.filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" })
+        return s.isEmpty ? nil : s
+    }
+
+    /// Every tag the app knows: saved in Settings, in a group, or used in a note.
+    func allTags(in tasks: [NoteTask]) -> [String] {
+        var set = Set(savedTags)
+        for g in tagGroups { set.formUnion(g.tags) }
+        for t in tasks { set.formUnion(ChipToken.values(of: .tag, in: t.body)) }
+        return set.sorted()
+    }
+
+    func group(of tag: String) -> TagGroup? { tagGroups.first { $0.tags.contains(tag) } }
+
+    func addTag(_ raw: String, group: UUID?) {
+        guard let t = Self.normalizeTag(raw) else { return }
+        moveTag(t, to: group)
+    }
+
+    /// Put a tag in a group (nil = no group). A tag is in at most one group.
+    func moveTag(_ tag: String, to group: UUID?) {
+        var groups = tagGroups
+        for i in groups.indices { groups[i].tags.removeAll { $0 == tag } }
+        var saved = savedTags.filter { $0 != tag }
+        if let group, let i = groups.firstIndex(where: { $0.id == group }) {
+            groups[i].tags.append(tag)
+            groups[i].tags.sort()
+        } else {
+            saved.append(tag)
+            saved.sort()
+        }
+        tagGroups = groups
+        savedTags = saved
+    }
+
+    func forgetTag(_ tag: String) {
+        savedTags.removeAll { $0 == tag }
+        var groups = tagGroups
+        for i in groups.indices { groups[i].tags.removeAll { $0 == tag } }
+        tagGroups = groups
+    }
+
+    func addGroup(_ name: String) {
+        let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !n.isEmpty else { return }
+        tagGroups.append(TagGroup(name: n, tags: []))
+    }
+
+    func renameGroup(_ id: UUID, _ name: String) {
+        guard let i = tagGroups.firstIndex(where: { $0.id == id }) else { return }
+        tagGroups[i].name = name
+    }
+
+    /// Delete a group; its tags are kept, without a group.
+    func deleteGroup(_ id: UUID) {
+        guard let g = tagGroups.first(where: { $0.id == id }) else { return }
+        tagGroups.removeAll { $0.id == id }
+        savedTags = Array(Set(savedTags + g.tags)).sorted()
     }
 
     var textColor: Color { Color(nsColor: NSColor(hex: textColorHex)) }

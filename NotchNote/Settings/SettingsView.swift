@@ -5,6 +5,10 @@ struct SettingsView: View {
     @ObservedObject private var settings = AppSettings.shared
     @ObservedObject private var store = TaskStore.shared
     @State private var loginError: String?
+    @State private var newTag = ""
+    @State private var newTagGroup: UUID?
+    @State private var newGroup = ""
+    @State private var tagToDelete: String?
 
     private let intervals: [(String, Int)] = [("Off", 0), ("Every 5 minutes", 5), ("Every 15 minutes", 15), ("Every 30 minutes", 30),
                                               ("Every hour", 60), ("Every 2 hours", 120), ("Every 4 hours", 240)]
@@ -45,6 +49,8 @@ struct SettingsView: View {
                 Text("Today adds up the time estimates of what you planned and warns when it passes your limit.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+
+            tagsSection
 
             Section("Sync folder") {
                 HStack {
@@ -109,6 +115,98 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 520, height: 640)
+        .confirmationDialog(deleteTitle, isPresented: Binding(get: { tagToDelete != nil }, set: { if !$0 { tagToDelete = nil } })) {
+            Button("Delete", role: .destructive) {
+                if let t = tagToDelete {
+                    store.removeTagEverywhere(t)
+                    settings.forgetTag(t)
+                }
+                tagToDelete = nil
+            }
+            Button("Cancel", role: .cancel) { tagToDelete = nil }
+        } message: {
+            if let t = tagToDelete, store.notesUsing(tag: t) > 0 {
+                Text("#\(t) will also be removed from \(store.notesUsing(tag: t)) note(s).")
+            }
+        }
+    }
+
+    // MARK: Tags
+
+    private var deleteTitle: String { "Delete #\(tagToDelete ?? "")?" }
+
+    private var allTags: [String] { settings.allTags(in: store.tasks) }
+    private var ungroupedTags: [String] { allTags.filter { settings.group(of: $0) == nil } }
+
+    private var tagsSection: some View {
+        Section("Tags") {
+            HStack {
+                TextField("New tag", text: $newTag).onSubmit(addTag)
+                Picker("", selection: $newTagGroup) {
+                    Text("No group").tag(UUID?.none)
+                    ForEach(settings.tagGroups) { Text($0.name).tag(UUID?.some($0.id)) }
+                }
+                .labelsHidden().frame(width: 130)
+                Button("Add", action: addTag).disabled(AppSettings.normalizeTag(newTag) == nil)
+            }
+            HStack {
+                TextField("New group", text: $newGroup).onSubmit(addGroup)
+                Button("Add group", action: addGroup)
+                    .disabled(newGroup.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+
+            ForEach(settings.tagGroups) { g in
+                HStack {
+                    Image(systemName: "folder").foregroundStyle(.secondary)
+                    TextField("Group name", text: Binding(get: { g.name }, set: { settings.renameGroup(g.id, $0) }))
+                        .textFieldStyle(.plain).fontWeight(.semibold)
+                    Spacer()
+                    Button { settings.deleteGroup(g.id) } label: { Image(systemName: "trash") }
+                        .buttonStyle(.borderless)
+                        .help("Delete this group. Its tags are kept, without a group.")
+                }
+                if g.tags.isEmpty {
+                    Text("No tags yet").font(.caption).foregroundStyle(.secondary).padding(.leading, 24)
+                }
+                ForEach(g.tags, id: \.self) { tagRow($0) }
+            }
+
+            if !ungroupedTags.isEmpty {
+                Text(settings.tagGroups.isEmpty ? "Tags" : "No group").font(.caption).foregroundStyle(.secondary)
+                ForEach(ungroupedTags, id: \.self) { tagRow($0) }
+            }
+
+            Text("Type # in a note to pick a tag from this list. #today and #tomorrow are date tags: they update by themselves (Tomorrow, then Today, then \u{201C}2 days late\u{201D}).")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private func tagRow(_ t: String) -> some View {
+        HStack {
+            Text("#" + t).padding(.leading, 24)
+            let n = store.notesUsing(tag: t)
+            if n > 0 { Text("\(n) note\(n == 1 ? "" : "s")").font(.caption).foregroundStyle(.secondary) }
+            Spacer()
+            Picker("", selection: Binding(get: { settings.group(of: t)?.id }, set: { settings.moveTag(t, to: $0) })) {
+                Text("No group").tag(UUID?.none)
+                ForEach(settings.tagGroups) { Text($0.name).tag(UUID?.some($0.id)) }
+            }
+            .labelsHidden().frame(width: 130)
+            Button { tagToDelete = t } label: { Image(systemName: "trash") }
+                .buttonStyle(.borderless)
+                .help("Delete this tag")
+        }
+    }
+
+    private func addTag() {
+        guard AppSettings.normalizeTag(newTag) != nil else { return }
+        settings.addTag(newTag, group: newTagGroup)
+        newTag = ""
+    }
+
+    private func addGroup() {
+        settings.addGroup(newGroup)
+        newGroup = ""
     }
 
     private func chooseFolder() {

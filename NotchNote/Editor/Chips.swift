@@ -37,13 +37,37 @@ struct ChipToken: Equatable {
         let f = DateFormatter(); f.dateFormat = "HH:mm"; return f
     }()
 
+    /// A date chip for a day relative to today, stored as a real date so its label updates by itself
+    /// (Tomorrow, then Today, then "1 day late", "2 days late"...).
+    static func day(_ offset: Int) -> ChipToken {
+        let d = Calendar.current.date(byAdding: .day, value: offset, to: Date()) ?? Date()
+        return ChipToken(kind: .date, value: dayFormat.string(from: d))
+    }
+
+    /// Days from today for a date chip (negative = late).
+    var dayOffset: Int? {
+        guard kind == .date else { return nil }
+        if value == "today" { return 0 }
+        if value == "tomorrow" { return 1 }
+        guard let d = Self.dayFormat.date(from: value) else { return nil }
+        let cal = Calendar.current
+        return cal.dateComponents([.day], from: cal.startOfDay(for: Date()), to: cal.startOfDay(for: d)).day
+    }
+
+    var fill: NSColor {
+        if let o = dayOffset, o < 0 { return NSColor(srgbRed: 1.0, green: 0.27, blue: 0.23, alpha: 0.45) }
+        return kind.fill
+    }
+
     var label: String {
         switch kind {
         case .date:
-            switch value {
-            case "today": return "Today"
-            case "tomorrow": return "Tomorrow"
-            case "nextweek": return "Next week"
+            if value == "nextweek" { return "Next week" }
+            switch dayOffset {
+            case 0?: return "Today"
+            case 1?: return "Tomorrow"
+            case let n? where n == -1: return "1 day late"
+            case let n? where n < -1: return "\(-n) days late"
             default:
                 if let d = Self.dayFormat.date(from: value) { return Self.shortDay.string(from: d) }
                 return value
@@ -71,7 +95,8 @@ struct ChipToken: Equatable {
     /// Parse the word typed before a space ("today", "p1", "#work", "@sam", "30m").
     static func parseQuick(_ word: String) -> ChipToken? {
         let w = word.lowercased()
-        if w == "today" || w == "tomorrow" { return ChipToken(kind: .date, value: w) }
+        if w == "today" || w == "#today" { return day(0) }
+        if w == "tomorrow" || w == "#tomorrow" { return day(1) }
         if w == "p1" { return ChipToken(kind: .prio, value: "h") }
         if w == "p2" { return ChipToken(kind: .prio, value: "m") }
         if w == "p3" { return ChipToken(kind: .prio, value: "l") }
@@ -136,7 +161,7 @@ final class ChipAttachment: NSTextAttachment {
         let size = text.size()
         let h = ceil(fontSize + 3)
         let w = ceil(size.width) + 14
-        let fill = chip.kind.fill
+        let fill = chip.fill
         return NSImage(size: NSSize(width: w, height: h), flipped: false) { rect in
             fill.setFill()
             NSBezierPath(roundedRect: rect, xRadius: h / 2, yRadius: h / 2).fill()

@@ -183,6 +183,17 @@ final class TaskStore: ObservableObject {
     }
 
     func setBody(_ id: UUID, _ body: String) { update(id) { $0.body = body } }
+
+    /// Number of notes that use a tag chip.
+    func notesUsing(tag: String) -> Int { tasks.filter { $0.body.contains("[[tag:\(tag)]]") }.count }
+
+    /// Remove a tag chip from every note.
+    func removeTagEverywhere(_ tag: String) {
+        let token = "[[tag:\(tag)]]"
+        for t in tasks where t.body.contains(token) {
+            update(t.id) { $0.body = $0.body.replacingOccurrences(of: token + " ", with: "").replacingOccurrences(of: token, with: "") }
+        }
+    }
     func setTitle(_ id: UUID, _ title: String) { update(id) { $0.title = title } }
 
     @discardableResult

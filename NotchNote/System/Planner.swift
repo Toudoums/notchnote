@@ -79,13 +79,13 @@ enum Planner {
     static func moveToTomorrow(_ item: PlanItem) {
         let today = ChipToken.dayFormat.string(from: Date())
         edit(item) { line in
-            line.replacingOccurrences(of: "[[date:today]]", with: "[[date:tomorrow]]")
-                .replacingOccurrences(of: "[[date:\(today)]]", with: "[[date:tomorrow]]")
+            line.replacingOccurrences(of: "[[date:today]]", with: ChipToken.day(1).token)
+                .replacingOccurrences(of: "[[date:\(today)]]", with: ChipToken.day(1).token)
         }
     }
 
     static func planForToday(_ item: PlanItem) {
-        edit(item) { $0 + " [[date:today]]" }
+        edit(item) { $0 + " " + ChipToken.day(0).token }
     }
 
     /// Adds "text p1 30m #tag" as a new checklist line dated today, in the open note (or the first note).
@@ -95,11 +95,11 @@ enum Planner {
         var chips: [String] = []
         for w in raw.split(separator: " ") {
             let word = String(w)
-            if word.lowercased() == "today" { continue }
+            if word.lowercased() == "today" || word.lowercased() == "#today" { continue }
             if let c = ChipToken.parseQuick(word) { chips.append(c.token) } else { words.append(word) }
         }
         guard !words.isEmpty else { return }
-        let line = "- [ ] " + words.joined(separator: " ") + " [[date:today]]" + (chips.isEmpty ? "" : " " + chips.joined(separator: " "))
+        let line = "- [ ] " + words.joined(separator: " ") + " " + ChipToken.day(0).token + (chips.isEmpty ? "" : " " + chips.joined(separator: " "))
         let target = store.selectedTask ?? store.tasks.first ?? store.createTask(title: "Inbox", select: false)
         store.update(target.id) { t in
             t.body = t.body.isEmpty ? line : (t.body.hasSuffix("\n") ? t.body + line : t.body + "\n" + line)

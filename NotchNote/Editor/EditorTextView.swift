@@ -16,6 +16,7 @@ final class EditorTextView: NSTextView {
 
     private var isProgrammaticEdit = false
     private var lastEditWasInsertion = false
+    let suggestions = TagSuggestionList()
 
     func configure() {
         isRichText = true                 // styling needs attributes; paste is forced to plain text below
@@ -30,6 +31,16 @@ final class EditorTextView: NSTextView {
         drawsBackground = false
         textContainerInset = NSSize(width: 6, height: 8)
         insertionPointColor = baseColor
+        NotificationCenter.default.addObserver(self, selector: #selector(dayChanged),
+                                               name: .NSCalendarDayChanged, object: nil)
+    }
+
+    /// Date chips say Today / Tomorrow / "2 days late": redraw them when the day changes.
+    @objc private func dayChanged() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, !self.hasMarkedText() else { return }
+            self.load(display: MarkdownCodec.toDisplay(self.markdownText()), clearUndo: false, selection: self.selectedRange())
+        }
     }
 
     // MARK: Loading
@@ -62,6 +73,7 @@ final class EditorTextView: NSTextView {
         }
         restyle()
         super.didChangeText()
+        if !isProgrammaticEdit { updateTagSuggestions() }
     }
 
     /// Replace a range through the normal edit pipeline so it is undoable and delegate-visible.
@@ -246,6 +258,7 @@ final class EditorTextView: NSTextView {
     override func insertNewline(_ sender: Any?) {
         // While an IME is composing, Return belongs to the IME (commit). Never touch it.
         if hasMarkedText() { super.insertNewline(sender); return }
+        if suggestions.isShown { acceptSuggestion(); return }
         let ns = string as NSString
         let sel = selectedRange()
         let lineRange = ns.lineRange(for: NSRange(location: sel.location, length: 0))
@@ -283,6 +296,7 @@ final class EditorTextView: NSTextView {
     }
 
     override func insertTab(_ sender: Any?) {
+        if suggestions.isShown { acceptSuggestion(); return }
         if !hasMarkedText(), let lr = currentLineIfListItem() {
             replace(NSRange(location: lr.location, length: 0), with: "  ")
             return
@@ -361,6 +375,7 @@ final class EditorTextView: NSTextView {
     }
 
     override func cancelOperation(_ sender: Any?) {
+        if suggestions.isShown { suggestions.hide(); return }
         // Esc: let the owning panel (if any) collapse. Does nothing in the task window.
         if let panel = window as? NotchPanel { panel.onEscape?() }
     }
@@ -558,5 +573,220 @@ final class EditorTextView: NSTextView {
         style("<u>(.+?)</u>") { storage.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: $0) }
         style("~~(.+?)~~") { storage.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: $0) }
         style("==(.+?)==") { storage.addAttribute(.backgroundColor, value: NSColor(srgbRed: 1, green: 0.84, blue: 0.04, alpha: 0.38), range: $0) }
+    }
+}
+
+// MARK: Tag suggestions ("#" opens a list that narrows as you type)
+
+extension EditorTextView {
+    /// The "#word" right before the caret, if the caret is in one.
+    fileprivate func tagQuery() -> (range: NSRange, text: String)? {
+        guard selectedRange().length == 0, !hasMarkedText() else { return nil }
+        let ns = string as NSString
+        let caret = selectedRange().location
+        var start = caret
+        while start > 0 {
+            let c = ns.character(at: start - 1)
+            if c == 35 { // "#"
+                if start - 1 > 0 {
+                    let before = ns.character(at: start - 2)
+                    guard before == 32 || before == 10 || before == 9 || before == 0xFFFC else { return nil }
+                }
+                let r = NSRange(location: start - 1, length: caret - start + 1)
+                return (r, ns.substring(with: NSRange(location: start, length: caret - start)).lowercased())
+            }
+            guard let u = UnicodeScalar(c), CharacterSet.alphanumerics.contains(u) || c == 45 || c == 95 else { return nil }
+            start -= 1
+        }
+        return nil
+    }
+
+    func updateTagSuggestions() {
+        guard window != nil, let q = tagQuery() else { suggestions.hide(); return }
+        let tags = AppSettings.shared.allTags(in: TaskStore.shared.tasks)
+        var items: [TagSuggestion] = []
+        for (word, offset) in [("today", 0), ("tomorrow", 1)] where q.text.isEmpty || word.hasPrefix(q.text) {
+            items.append(TagSuggestion(title: "#" + word, detail: "date", chip: .day(offset)))
+        }
+        let starts = tags.filter { $0.hasPrefix(q.text) }
+        let contains = q.text.isEmpty ? [] : tags.filter { !$0.hasPrefix(q.text) && $0.contains(q.text) }
+        for t in starts + contains {
+            items.append(TagSuggestion(title: "#" + t, detail: AppSettings.shared.group(of: t)?.name ?? "",
+                                       chip: ChipToken(kind: .tag, value: t)))
+        }
+        if let new = AppSettings.normalizeTag(q.text), !tags.contains(new), new != "today", new != "tomorrow" {
+            items.append(TagSuggestion(title: "#" + new, detail: "new tag", chip: ChipToken(kind: .tag, value: new)))
+        }
+        guard !items.isEmpty else { suggestions.hide(); return }
+        let caretRect = firstRect(forCharacterRange: NSRange(location: q.range.location, length: 0), actualRange: nil)
+        suggestions.show(items, below: caretRect, parent: window) { [weak self] item in
+            self?.accept(item)
+        }
+    }
+
+    fileprivate func acceptSuggestion() {
+        if let item = suggestions.selectedItem { accept(item) } else { suggestions.hide() }
+    }
+
+    private func accept(_ item: TagSuggestion) {
+        suggestions.hide()
+        guard let q = tagQuery() else { return }
+        let att = NSMutableAttributedString(attributedString: NSAttributedString(attachment: ChipAttachment(item.chip, fontSize: baseFontSize)))
+        att.append(NSAttributedString(string: " "))
+        replaceAttributed(q.range, with: att)
+        setSelectedRange(NSRange(location: q.range.location + 2, length: 0))
+    }
+
+    override func moveUp(_ sender: Any?) {
+        if suggestions.isShown { suggestions.move(-1) } else { super.moveUp(sender) }
+    }
+
+    override func moveDown(_ sender: Any?) {
+        if suggestions.isShown { suggestions.move(1) } else { super.moveDown(sender) }
+    }
+
+    override func setSelectedRanges(_ ranges: [NSValue], affinity: NSSelectionAffinity, stillSelecting: Bool) {
+        super.setSelectedRanges(ranges, affinity: affinity, stillSelecting: stillSelecting)
+        if suggestions.isShown, tagQuery() == nil { suggestions.hide() }
+    }
+
+    override func resignFirstResponder() -> Bool {
+        suggestions.hide()
+        return super.resignFirstResponder()
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil { suggestions.hide() }
+        super.viewWillMove(toWindow: newWindow)
+    }
+}
+
+struct TagSuggestion {
+    let title: String
+    let detail: String
+    let chip: ChipToken
+}
+
+/// Small floating list under the caret. It never takes keyboard focus: typing keeps going to the editor.
+@MainActor
+final class TagSuggestionList {
+    private var panel: NSPanel?
+    private var listView: TagListView?
+    private weak var parent: NSWindow?
+
+    var isShown: Bool { panel?.isVisible == true }
+    var selectedItem: TagSuggestion? { listView.flatMap { $0.items.indices.contains($0.selected) ? $0.items[$0.selected] : nil } }
+
+    func show(_ items: [TagSuggestion], below caret: NSRect, parent: NSWindow?, onPick: @escaping (TagSuggestion) -> Void) {
+        guard let parent else { return }
+        let rowH: CGFloat = 24
+        let shown = min(items.count, 7)
+        let size = NSSize(width: 220, height: CGFloat(shown) * rowH + 8)
+        if panel == nil {
+            let p = NSPanel(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless, .nonactivatingPanel],
+                            backing: .buffered, defer: false)
+            p.isFloatingPanel = true
+            p.backgroundColor = .clear
+            p.isOpaque = false
+            p.hasShadow = true
+            p.hidesOnDeactivate = false
+            p.isReleasedWhenClosed = false
+            p.animationBehavior = .none
+            p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
+            let v = TagListView(frame: NSRect(origin: .zero, size: size))
+            v.autoresizingMask = [.width, .height]
+            p.contentView = v
+            panel = p
+            listView = v
+        }
+        guard let panel, let listView else { return }
+        let previous = selectedItem?.title
+        listView.items = Array(items.prefix(shown))
+        listView.selected = listView.items.firstIndex { $0.title == previous } ?? 0
+        listView.rowHeight = rowH
+        listView.onPick = onPick
+        listView.needsDisplay = true
+
+        var origin = NSPoint(x: caret.minX - 6, y: caret.minY - size.height - 4)
+        if let screen = parent.screen ?? NSScreen.main {
+            origin.x = min(max(origin.x, screen.frame.minX + 4), screen.frame.maxX - size.width - 4)
+            if origin.y < screen.frame.minY + 4 { origin.y = caret.maxY + 4 }
+        }
+        panel.setFrame(NSRect(origin: origin, size: size), display: true)
+        panel.level = NSWindow.Level(rawValue: parent.level.rawValue + 1)
+        if self.parent !== parent {
+            self.parent?.removeChildWindow(panel)
+            parent.addChildWindow(panel, ordered: .above)
+            self.parent = parent
+        }
+        panel.orderFrontRegardless()
+        if parent is NotchPanel { NotchSpace.shared.adopt(panel) }
+    }
+
+    func move(_ delta: Int) {
+        guard let v = listView, !v.items.isEmpty else { return }
+        v.selected = (v.selected + delta + v.items.count) % v.items.count
+        v.needsDisplay = true
+    }
+
+    func hide() {
+        guard let panel, panel.isVisible else { return }
+        parent?.removeChildWindow(panel)
+        parent = nil
+        panel.orderOut(nil)
+    }
+}
+
+private final class TagListView: NSView {
+    var items: [TagSuggestion] = []
+    var selected = 0
+    var rowHeight: CGFloat = 24
+    var onPick: ((TagSuggestion) -> Void)?
+
+    override var isFlipped: Bool { true }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let bg = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 9, yRadius: 9)
+        NSColor(white: 0.13, alpha: 0.98).setFill(); bg.fill()
+        NSColor(white: 1, alpha: 0.14).setStroke(); bg.lineWidth = 1; bg.stroke()
+        let titleFont = NSFont.systemFont(ofSize: 12.5, weight: .medium)
+        let detailFont = NSFont.systemFont(ofSize: 11)
+        for (i, item) in items.enumerated() {
+            let row = NSRect(x: 4, y: 4 + CGFloat(i) * rowHeight, width: bounds.width - 8, height: rowHeight)
+            if i == selected {
+                NSColor(white: 1, alpha: 0.16).setFill()
+                NSBezierPath(roundedRect: row, xRadius: 6, yRadius: 6).fill()
+            }
+            let dot = NSRect(x: row.minX + 8, y: row.midY - 4, width: 8, height: 8)
+            item.chip.fill.withAlphaComponent(0.9).setFill()
+            NSBezierPath(ovalIn: dot).fill()
+            let t = NSAttributedString(string: item.title, attributes: [.font: titleFont, .foregroundColor: NSColor.white])
+            t.draw(at: NSPoint(x: dot.maxX + 8, y: row.midY - t.size().height / 2))
+            if !item.detail.isEmpty {
+                let d = NSAttributedString(string: item.detail, attributes: [.font: detailFont, .foregroundColor: NSColor(white: 1, alpha: 0.5)])
+                d.draw(at: NSPoint(x: row.maxX - d.size().width - 8, y: row.midY - d.size().height / 2))
+            }
+        }
+    }
+
+    private func index(at event: NSEvent) -> Int? {
+        let p = convert(event.locationInWindow, from: nil)
+        let i = Int((p.y - 4) / rowHeight)
+        return items.indices.contains(i) ? i : nil
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for a in trackingAreas { removeTrackingArea(a) }
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeAlways, .inVisibleRect], owner: self, userInfo: nil))
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        if let i = index(at: event), i != selected { selected = i; needsDisplay = true }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if let i = index(at: event) { onPick?(items[i]) }
     }
 }
